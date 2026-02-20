@@ -1,0 +1,20 @@
+{
+  "_comment": "Map GitHub event types to Discord channel NAMES. Use null to disable an event type.",
+  "channels": {
+    "push":                "github-commits",
+    "pull_request":        "github-commits",
+    "issues":              "github-issues",
+    "issue_comment":       "github-issues",
+    "pull_request_review": "github-commits",
+    "create":              "github-commits",
+    "delete":              "github-commits",
+    "release":             "github-releases",
+    "star":                "github-issues",
+    "fork":                "github-issues",
+    "workflow_run":        "github-commits",
+    "check_run":           "github-commits",
+    "deployment":          "github-commits",
+    "deployment_status":   "github-commits"
+  },
+  "_note": "Channel names above must exist in your Discord server. Create them first!"
+}
