@@ -1,23 +1,12 @@
-// index.js — GitBot V2
+// index.js — GitBot V3
 // ─────────────────────────────────────────────────────────────────────────────
-// What's new in V2:
-//   Commands:
-//     /mute <event> [reason]  — silence an event for 15m/1h/6h/24h via buttons
-//     /watchlist              — list active mutes with one-click Unmute buttons
-//     /digest [count]         — paginated ring-buffer of the last 50 events
-//     /clear-stats            — reset counters with confirm → undo flow
-//
-//   Context menus (right-click a message):
-//     "📌 Pin to GitHub log"   — reposts to a configurable #github-log channel
-//     "🔁 Resend this embed"   — re-sends a GitBot embed to any configured channel
-//
-//   Upgraded interactions:
-//     /test    — ✅ "Looks good!" deletes the test embed; 🔁 Resend resends it
-//     /status  — 🔄 Refresh edits in place, ✅ blinks on update; 🗑️ Dismiss
-//     /events  — 🔄 Refresh + 🗑️ Dismiss
-//     /route   — shows confirm (✅/❌) before writing to disk; ↩️ Undo after
-//     /ping    — visual latency bars + 🗑️ Dismiss
-//     /config  — shows active mutes inline + 🗑️ Dismiss
+// What's new in V3 (Multi-Repository Support):
+//   - SQLite database for storing multiple repositories
+//   - /repo add/remove/list/info/enable - manage multiple repos
+//   - /admin add/remove/list - manage bot administrators
+//   - Per-repo webhook routing (/webhook/:repoId or /webhook/owner/repo)
+//   - Auto-generated webhook secrets per repository
+//   - Legacy mode still supported for config.json
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use strict";
@@ -43,10 +32,25 @@ const crypto  = require("crypto");
 const fs      = require("fs");
 const path    = require("path");
 
-const { buildEmbed }                         = require("./embeds");
+// Database and modules
+const db        = require("./database");
+const { buildEmbed } = require("./embeds");
 const { helpCommand, handleHelpInteraction } = require("./help");
-const digest                                 = require("./digest");
-const mutes                                  = require("./mutes");
+const digest   = require("./digest");
+const mutes    = require("./mutes");
+const poller   = require("./poller");
+const {
+  repoCommands,
+  handleRepoCommand,
+  handleAdminCommand,
+  handleRepoInteraction,
+  setBotOwnerId,
+} = require("./repoCommands");
+const {
+  createWebhookRouter,
+  handlePolledEvent,
+  stats: webhookStats,
+} = require("./multiWebhook");
 
 // ─── Startup validation ───────────────────────────────────────────────────────
 
@@ -58,20 +62,14 @@ if (missingEnv.length) {
   process.exit(1);
 }
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-const CONFIG_PATH = path.join(__dirname, "config.json");
+// ─── Config (Legacy - kept for compatibility) ───────────────────────────────────
 
 function loadConfig() {
-  delete require.cache[require.resolve(CONFIG_PATH)];
-  return require(CONFIG_PATH);
+  return { channels: {} };
 }
 
-function saveConfig(cfg) {
-  // Strip leading-underscore comment keys before persisting
-  const clean = { channels: cfg.channels };
-  if (cfg.log_channel) clean.log_channel = cfg.log_channel;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(clean, null, 2));
+function saveConfig() {
+  // No-op - config.json is deprecated
 }
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
@@ -133,7 +131,7 @@ function buildStatusEmbed() {
 
   return new EmbedBuilder()
     .setColor(0x5865F2)
-    .setTitle("🤖 GitBot V2 — Status")
+    .setTitle("🤖 GitBot V3 — Status")
     .setThumbnail(client.user.displayAvatarURL())
     .addFields(
       { name: "🟢 Bot",          value: `**${client.user.tag}**`,               inline: false },
@@ -243,19 +241,6 @@ const slashCommands = [
     .setName("status")
     .setDescription("Show bot status, uptime, and event statistics"),
 
-  new SlashCommandBuilder()
-    .setName("config")
-    .setDescription("Display the current channel routing configuration"),
-
-  new SlashCommandBuilder()
-    .setName("route")
-    .setDescription("Change where a GitHub event type gets posted")
-    .addStringOption(o =>
-      o.setName("event").setDescription("GitHub event type").setRequired(true).addChoices(...EVENT_CHOICES)
-    )
-    .addStringOption(o =>
-      o.setName("channel").setDescription("Channel name, or 'disable'").setRequired(true)
-    ),
 
   new SlashCommandBuilder()
     .setName("events")
@@ -311,7 +296,26 @@ const contextMenus = [
     .toJSON(),
 ];
 
-const allCommands = [...slashCommands, helpCommand, ...contextMenus];
+const allCommands = [...slashCommands, ...repoCommands, helpCommand, ...contextMenus];
+
+// ─── Initialize Database ───────────────────────────────────────────────────────
+
+// Initialize database before starting
+try {
+  db.init();
+  console.log("[db] Database initialized");
+} catch (err) {
+  console.error("[db] Failed to initialize:", err.message);
+}
+
+// ─── GitHub Poller ────────────────────────────────────────────────────────────
+
+const githubPoller = new poller.GitHubPoller({
+  interval: 60000, // Poll every minute
+  onEvent: (eventType, payload, repo) => {
+    handlePolledEvent(eventType, payload, repo, client);
+  },
+});
 
 // ─── Register ─────────────────────────────────────────────────────────────────
 
@@ -332,7 +336,7 @@ async function registerCommands() {
 // ─── Presence rotation ────────────────────────────────────────────────────────
 
 const presenceMessages = [
-  () => ({ name: "GitHub webhooks · V2",              type: ActivityType.Watching }),
+  () => ({ name: "GitHub webhooks · V3",              type: ActivityType.Watching }),
   () => ({ name: `${stats.eventsReceived} events`,    type: ActivityType.Playing  }),
   () => {
     const mins = Math.floor((Date.now() - stats.startTime) / 60_000);
@@ -417,85 +421,6 @@ client.on("interactionCreate", async (interaction) => {
         embeds:     [buildStatusEmbed()],
         components: [rowRefreshDismiss("status:refresh", "status:dismiss")],
       });
-      return;
-    }
-
-    // ── /config ──────────────────────────────────────────────────────────────
-    if (cmd === "config") {
-      const cfg         = loadConfig();
-      const activeMutes = new Set(mutes.list().map(m => m.eventType));
-
-      const rows = Object.entries(cfg.channels)
-        .map(([evt, ch]) => {
-          const isMuted = activeMutes.has(evt) ? " 🔇" : "";
-          return `\`${evt.padEnd(22)}\` → ${ch ? `**#${ch}**` : "~~disabled~~"}${isMuted}`;
-        })
-        .join("\n");
-
-      const embed = new EmbedBuilder()
-        .setColor(0x3498DB)
-        .setTitle("⚙️ Channel Routing Config")
-        .setDescription(rows)
-        .setFooter({ text: "🔇 = currently muted  •  Hot-reloaded from config.json on every event" })
-        .setTimestamp();
-
-      await interaction.reply({
-        embeds:     [embed],
-        components: [rowDismiss("config:dismiss")],
-      });
-      return;
-    }
-
-    // ── /route ───────────────────────────────────────────────────────────────
-    if (cmd === "route") {
-      const eventArg   = interaction.options.getString("event");
-      const channelArg = interaction.options.getString("channel");
-      const newChannel = channelArg.toLowerCase() === "disable"
-        ? null
-        : channelArg.replace(/^#/, "");
-
-      const cfg        = loadConfig();
-      const oldChannel = cfg.channels[eventArg] ?? null;
-
-      const oldStr = oldChannel ? `**#${oldChannel}**` : "~~disabled~~";
-      const newStr = newChannel ? `**#${newChannel}**` : "~~disabled~~";
-
-      const confirmEmbed = new EmbedBuilder()
-        .setColor(0xF39C12)
-        .setTitle("⚙️ Confirm Route Change")
-        .setDescription(
-          `Update routing for **\`${eventArg}\`**?\n\n` +
-          `${oldStr}  →  ${newStr}\n\n` +
-          "Changes are written to `config.json` immediately."
-        )
-        .setFooter({ text: "This confirmation expires in 30 seconds" });
-
-      const confirmRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`route:confirm:${eventArg}:${newChannel ?? "__off__"}`)
-          .setLabel("Confirm")
-          .setEmoji("✅")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("route:cancel")
-          .setLabel("Cancel")
-          .setEmoji("❌")
-          .setStyle(ButtonStyle.Secondary),
-      );
-
-      await interaction.reply({ embeds: [confirmEmbed], components: [confirmRow], ephemeral: true });
-
-      // Disable buttons after 30 s so stale confirms can't fire
-      setTimeout(async () => {
-        try {
-          await interaction.editReply({
-            components: [new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId("__n1__").setLabel("Confirm").setEmoji("✅").setStyle(ButtonStyle.Success).setDisabled(true),
-              new ButtonBuilder().setCustomId("__n2__").setLabel("Cancel").setEmoji("❌").setStyle(ButtonStyle.Secondary).setDisabled(true),
-            )],
-          });
-        } catch { /* interaction may already be gone */ }
-      }, 30_000);
       return;
     }
 
@@ -738,6 +663,16 @@ client.on("interactionCreate", async (interaction) => {
       }, 30_000);
       return;
     }
+
+    // ── /repo commands ──────────────────────────────────────────────────────
+    if (cmd === "repo") {
+      return handleRepoCommand(interaction);
+    }
+
+    // ── /admin commands ──────────────────────────────────────────────────────
+    if (cmd === "admin") {
+      return handleAdminCommand(interaction);
+    }
   }
 
   // ══ Context menus ════════════════════════════════════════════════════════════
@@ -839,6 +774,11 @@ client.on("interactionCreate", async (interaction) => {
   // ══ Button handlers ══════════════════════════════════════════════════════════
   else if (interaction.isButton()) {
     const id = interaction.customId;
+
+    // ── Handle repo interactions (from /repo info) ─────────────────────────────
+    if (id.startsWith("repo:")) {
+      if (await handleRepoInteraction(interaction)) return;
+    }
 
     // ── Generic / named dismissals ────────────────────────────────────────────
     if (
@@ -1218,17 +1158,22 @@ function buildDigestPayload(entries, currentCount) {
 // ─── Bot ready ────────────────────────────────────────────────────────────────
 
 client.once("ready", async () => {
-  console.log(`✅ GitBot V2 logged in as ${client.user.tag}`);
+  // Set bot owner ID for admin checks
+  setBotOwnerId(client.user.id);
+  
+  console.log(`✅ GitBot V3 logged in as ${client.user.tag}`);
   const cfg = loadConfig();
   console.log("\n📋 Channel routing:");
   Object.entries(cfg.channels).forEach(([evt, ch]) => {
     console.log(`   ${evt.padEnd(25)} → ${ch ? `#${ch}` : "(disabled)"}`);
   });
-  console.log(`\n🔗 GitHub webhook URL: http://YOUR_IP:${process.env.WEBHOOK_PORT || 3000}/webhook\n`);
+  const baseUrl = process.env.WEBHOOK_BASE_URL || `http://YOUR_IP:${process.env.WEBHOOK_PORT || 3000}`;
+  console.log(`\n🔗 Webhook base URL: ${baseUrl}`);
+  console.log(`   Health check:      ${baseUrl}/health\n`);
 
   client.user.setPresence({
     status:     "online",
-    activities: [{ name: "GitHub webhooks · V2", type: ActivityType.Watching }],
+    activities: [{ name: "GitHub webhooks · V3", type: ActivityType.Watching }],
   });
 
   setInterval(rotatePresence, 30_000);
@@ -1252,82 +1197,24 @@ function verifySignature(rawBody, sig) {
   catch { return false; }
 }
 
-// ─── Webhook server ───────────────────────────────────────────────────────────
+// ─── Webhook server (Multi-repo) ─────────────────────────────────────────────
 
 const app = express();
 
-app.use(express.json({
-  verify: (req, _res, buf) => { req.rawBody = buf; },
-}));
+// Use the multi-repo webhook router
+const webhookRouter = createWebhookRouter(client, getChannel);
+app.use(webhookRouter);
 
-app.post("/webhook", async (req, res) => {
-  if (!client.isReady()) return res.status(503).send("Bot not ready");
-
-  const sig       = req.headers["x-hub-signature-256"];
-  const eventType = req.headers["x-github-event"];
-  const payload   = req.body;
-
-  if (!verifySignature(req.rawBody, sig)) {
-    console.warn("[webhook] Invalid signature — rejected");
-    return res.status(401).send("Invalid signature");
-  }
-  if (!eventType) return res.status(400).send("Missing X-GitHub-Event header");
-
-  console.log(`[webhook] ${eventType} (action: ${payload.action || "n/a"})`);
-  // Respond immediately — GitHub's delivery timeout is 10 s
-  res.status(200).send("OK");
-
-  try {
-    const cfg         = loadConfig();
-    const channelName = cfg.channels[eventType];
-
-    if (!channelName) {
-      console.log(`[webhook] "${eventType}" unmapped — skipping`);
-      digest.push(eventType, payload, "ignored");
-      recordEvent(eventType, "ignored");
-      return;
-    }
-
-    if (mutes.isMuted(eventType)) {
-      console.log(`[webhook] "${eventType}" muted — skipping post`);
-      digest.push(eventType, payload, "muted");
-      recordEvent(eventType, "muted");
-      return;
-    }
-
-    const embed = buildEmbed(eventType, payload);
-    if (!embed) {
-      console.log(`[webhook] No embed for "${eventType}" action="${payload.action}" — skipping`);
-      digest.push(eventType, payload, "ignored");
-      recordEvent(eventType, "ignored");
-      return;
-    }
-
-    const channel = await getChannel(channelName);
-    if (!channel) {
-      digest.push(eventType, payload, "dropped");
-      recordEvent(eventType, "dropped");
-      return;
-    }
-
-    await channel.send({ embeds: [embed] });
-    digest.push(eventType, payload, "sent");
-    recordEvent(eventType, "sent");
-    console.log(`[webhook] ✉️  "${eventType}" → #${channelName}`);
-
-  } catch (err) {
-    console.error(`[webhook] Error on "${eventType}": ${err.message}`);
-    digest.push(eventType, payload, "dropped");
-    recordEvent(eventType, "dropped");
-  }
-});
-
+// Also add legacy health endpoint at root
 app.get("/health", (_req, res) => {
   res.json({
     status:   "ok",
-    version:  "2.0.0",
+    version:  "3.0.0",
+    mode:     "multi-repo",
     bot:      client.isReady() ? "connected" : "disconnected",
     uptime:   process.uptime(),
+    repos:    db.getAllRepositories().length,
+    polling:  db.getPollableRepositories().length,
     mutes:    mutes.list().map(m => ({
       event:     m.eventType,
       expiresAt: m.expiresAt,

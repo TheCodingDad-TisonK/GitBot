@@ -1,7 +1,7 @@
 {
   "name": "discord-github-bot",
-  "version": "2.0.0",
-  "description": "GitBot V2 — Discord bot that forwards GitHub events with rich interactions",
+  "version": "3.0.0thi",
+  "description": "GitBot V3 — Multi-repo Discord bot with GitHub webhook and polling support",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,7 +10,8 @@
   "dependencies": {
     "discord.js": "^14.14.1",
     "express":    "^4.18.2",
-    "dotenv":     "^16.3.1"
+    "dotenv":     "^16.3.1",
+    "better-sqlite3": "^9.4.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

@@ -1,3 +1,17 @@
+# Dependencies
 node_modules/
+
+# Environment — never commit secrets
 .env
+
+# Database — contains repo secrets and admin data
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
 *.log
+npm-debug.log*
+
+# Runtime
+.DS_Store
