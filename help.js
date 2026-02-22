@@ -19,7 +19,6 @@ const C = {
   commands:      0x3498DB,
   context_menus: 0x9B59B6,
   events:        0x2ECC71,
-  routing:       0x9B59B6,
   setup:         0xF1C40F,
   tips:          0xF39C12,
 };
@@ -34,10 +33,9 @@ const CATEGORIES = {
     pages: [{
       title: "📖 GitBot V3 — Overview",
       description:
-        "GitBot V3 is a self-hosted Discord bot that forwards **GitHub webhook events** to channels " +
-        "as rich embeds. Events are routed per-type and hot-reload from `config.json` without a restart.\n\n" +
-        "V3 adds **multi-repo support**, **muting**, a **live digest**, **context menus**, and fully interactive embeds with " +
-        "confirmation flows and undo support.",
+        "GitBot V3 is a self-hosted Discord bot that forwards **GitHub webhook events** to your Discord server as rich embeds.\n\n" +
+        "Add any number of repositories with `/repo add` — each gets its own channel, auto-generated webhook secret, " +
+        "and a guided DM setup flow for the repo owner. Events are verified, routed, and posted automatically.",
       fields: [
         {
           name: "📦 Files",
@@ -75,7 +73,41 @@ const CATEGORIES = {
     pages: [
       {
         title: "🤖 Slash Commands — Page 1 / 3",
-        description: "Core commands:",
+        description: "Repository & admin commands:",
+        fields: [
+          {
+            name: "➕ `/repo add`",
+            value:
+              "Add a GitHub repository to monitor.\n" +
+              "Creates a dedicated channel, generates a webhook secret, and optionally DMs " +
+              "setup instructions to the repo owner with a confirm button.\n" +
+              "Options: `repository` (required), `channel`, `polling`, `user`.",
+          },
+          {
+            name: "📋 `/repo list [detailed]`",
+            value: "List all monitored repositories. Add `detailed:true` for channel, status, and timestamps.",
+          },
+          {
+            name: "📊 `/repo info`",
+            value: "Full details for a repository — channel, method, status, error. Has **Enable/Disable** and **Delete** buttons.",
+          },
+          {
+            name: "🗑️ `/repo remove`",
+            value: "Permanently remove a repository from monitoring.",
+          },
+          {
+            name: "🔛 `/repo enable`",
+            value: "Toggle a repository active or inactive without deleting it.",
+          },
+          {
+            name: "👮 `/admin add / remove / list`",
+            value: "Manage bot administrators. Any Discord **Administrator** is automatically an admin.",
+          },
+        ],
+      },
+      {
+        title: "🤖 Slash Commands — Page 2 / 3",
+        description: "Status & monitoring:",
         fields: [
           {
             name: "🏓 `/ping`",
@@ -91,38 +123,11 @@ const CATEGORIES = {
               "Has **🔄 Refresh** (edits in place, blinks ✅ briefly) + **🗑️ Dismiss**.",
           },
           {
-            name: "⚙️ `/config`",
-            value:
-              "Display the live channel routing table. Muted events show a 🔇 indicator.\n" +
-              "Has **🗑️ Dismiss**.",
-          },
-          {
-            name: "🔀 `/route <event> <channel|disable>`",
-            value:
-              "Change where an event gets posted.\n" +
-              "Shows old → new and a **✅ Confirm / ❌ Cancel** before writing.\n" +
-              "After confirming, shows **↩️ Undo** for 30 seconds.\n" +
-              "Both prompts auto-expire and disable after 30 s.",
-          },
-        ],
-      },
-      {
-        title: "🤖 Slash Commands — Page 2 / 3",
-        description: "Stats + testing:",
-        fields: [
-          {
             name: "📈 `/events`",
             value:
               "Visual 10-block bar chart of event counts since startup. Muted types show 🔇.\n" +
               "Footer shows totals split by outcome.\n" +
               "Has **🔄 Refresh** + **🗑️ Dismiss**.",
-          },
-          {
-            name: "🧪 `/test [channel]`",
-            value:
-              "Send a test embed to a channel to verify bot permissions.\n" +
-              "The embed has **✅ Looks good!** (deletes it) + **🔁 Resend** (sends a fresh copy).\n" +
-              "The slash reply is ephemeral with a jump link.",
           },
           {
             name: "📋 `/digest [count]`",
@@ -132,14 +137,17 @@ const CATEGORIES = {
               "Has **⬆️ Load more** (adds 10) and **🗑️ Dismiss**.",
           },
           {
-            name: "❓ `/help`",
-            value: "You're looking at it!",
+            name: "🧪 `/test [channel]`",
+            value:
+              "Send a test embed to a channel to verify bot permissions.\n" +
+              "The embed has **✅ Looks good!** (deletes it) + **🔁 Resend** (sends a fresh copy).\n" +
+              "The slash reply is ephemeral with a jump link.",
           },
         ],
       },
       {
         title: "🤖 Slash Commands — Page 3 / 3",
-        description: "Muting + admin:",
+        description: "Muting + other:",
         fields: [
           {
             name: "🔇 `/mute <event> [reason]`",
@@ -164,6 +172,10 @@ const CATEGORIES = {
               "Shows **🗑️ Yes, reset / ❌ Never mind** before acting.\n" +
               "Prompt auto-expires after 30 s. Digest ring buffer is preserved.",
           },
+          {
+            name: "❓ `/help`",
+            value: "You're looking at it!",
+          },
         ],
       },
     ],
@@ -181,8 +193,7 @@ const CATEGORIES = {
         {
           name: "📌 Pin to GitHub log",
           value:
-            "Reposts the message to a configurable archive channel.\n\n" +
-            "• Set `\"log_channel\": \"github-log\"` in `config.json`.\n" +
+            "Reposts the message to `#github-log` as a permanent archive.\n\n" +
             "• Pinned post includes source channel, author, and a **[View original]** link.\n" +
             "• If the message has embeds, the first one is forwarded too.\n" +
             "• Pinned post has an **✅ Acknowledged** button (disables itself when clicked).\n" +
@@ -191,9 +202,9 @@ const CATEGORIES = {
         {
           name: "🔁 Resend this embed",
           value:
-            "Re-sends a GitBot-generated embed to any configured channel.\n\n" +
+            "Re-sends a GitBot-generated embed to any channel.\n\n" +
             "• Only works on messages sent **by GitBot**.\n" +
-            "• Shows channel buttons from your routing config (up to 4 + Cancel).\n" +
+            "• Shows buttons for up to 4 available channels + Cancel.\n" +
             "• The resent message includes a footer showing who resent it and from where.\n" +
             "• Slash reply is ephemeral.",
         },
@@ -207,7 +218,7 @@ const CATEGORIES = {
     pages: [
       {
         title: "📡 Supported Events — Page 1 / 2",
-        description: "Enable/disable any event via `config.json` or `/route`.",
+        description: "All events are handled automatically per repository. Use `/mute` to silence any event type temporarily.",
         fields: [
           { name: "📦 `push`",                value: "Commits pushed to any branch.", inline: true },
           { name: "🔀 `pull_request`",         value: "PR opened, merged, closed, review requested.", inline: true },
@@ -228,57 +239,17 @@ const CATEGORIES = {
           { name: "✅ `workflow_run`",       value: "GitHub Actions workflow completed.", inline: true },
           { name: "🔎 `check_run`",          value: "CI check failed/anomaly (successes are silent).", inline: true },
           { name: "🚢 `deployment_status`",  value: "Deployment status updated.", inline: true },
+          { name: "🏓 `ping`",               value: "GitHub connectivity test — posts a confirmation embed in the repo's channel.", inline: true },
           {
             name: "➕ Adding new events",
             value:
-              "1. Add `\"event\": \"channel\"` to `config.json`\n" +
-              "2. Add `formatEventName(payload)` in `embeds.js`\n" +
-              "3. Add a `case` in `buildEmbed()` switch\n" +
-              "4. Add to `EVENT_CHOICES` in `index.js`",
+              "1. Add `formatEventName(payload)` in `embeds.js`\n" +
+              "2. Add a `case` in `buildEmbed()` switch in `embeds.js`\n" +
+              "3. Add to `EVENT_CHOICES` in `index.js` so it appears in `/mute`",
           },
         ],
       },
     ],
-  },
-
-  routing: {
-    label: "🎛️ Channel Routing", description: "Configuring which events go where",
-    color: C.routing,
-    pages: [{
-      title: "🎛️ Channel Routing",
-      description:
-        "Every event type maps to a Discord channel name in `config.json`, " +
-        "re-read on **every** webhook — no restart required.",
-      fields: [
-        {
-          name: "Default routing",
-          value:
-            "```\n#github-releases  ← release\n#github-commits   ← push, pull_request, create,\n" +
-            "                    delete, pull_request_review,\n" +
-            "                    workflow_run, check_run,\n" +
-            "                    deployment_status\n#github-issues    ← issues, issue_comment,\n" +
-            "                    star, fork\n```",
-        },
-        {
-          name: "📌 Log channel (for Pin)",
-          value: "Add `\"log_channel\": \"github-log\"` to enable **📌 Pin to GitHub log**.",
-        },
-        {
-          name: "✏️ Edit via /route",
-          value:
-            "`/route push github-dev` — route push to #github-dev\n" +
-            "`/route star disable` — disable star notifications\n" +
-            "Triggers confirm → optional undo before writing.",
-        },
-        {
-          name: "⚠️ Rules",
-          value:
-            "• Channel names are **case-sensitive**, no `#` prefix\n" +
-            "• Set to `null` in JSON to disable\n" +
-            "• Bot warns in console if a channel can't be found",
-        },
-      ],
-    }],
   },
 
   setup: {
@@ -287,7 +258,7 @@ const CATEGORIES = {
     pages: [
       {
         title: "⚡ Setup Guide — Page 1 / 2",
-        description: "Get GitBot V2 running:",
+        description: "Get GitBot V3 running:",
         fields: [
           {
             name: "1️⃣ Clone & install",
@@ -376,16 +347,16 @@ const CATEGORIES = {
           {
             name: "❌ Bot doesn't post",
             value:
-              "• Run `/test #channel` to check permissions\n" +
-              "• Check `/config` for 🔇 muted events or disabled routes\n" +
-              "• Ensure channel name in config matches exactly",
+              "• Run `/test` to check the bot has permissions in the channel\n" +
+              "• Run `/watchlist` to check for active mutes\n" +
+              "• Run `/repo list` to confirm the repo is active and pointing to the right channel",
           },
           {
             name: "❌ GitHub shows red ✗",
             value:
-              "• Payload URL must end in `/webhook`\n" +
-              "• Check bot is running + port is reachable\n" +
-              "• `GITHUB_WEBHOOK_SECRET` must match on both sides",
+              "• Payload URL must match exactly — e.g. `https://your-url/webhook/1`\n" +
+              "• Check the bot is running and ngrok is connected (`/health`)\n" +
+              "• The webhook secret in GitHub must match what was generated at `/repo add`",
           },
           {
             name: "🔎 Health check",
@@ -396,9 +367,9 @@ const CATEGORIES = {
           {
             name: "📝 Console logs",
             value:
-              "`[webhook] ✉️  \"push\" → #github-commits`\n" +
+              "`[webhook] ✉️  \"push\" from owner/repo → #github-owner-repo`\n" +
               "`[webhook] \"star\" muted — skipping post`\n" +
-              "`[webhook] \"unknown_event\" unmapped — skipping`",
+              "`[webhook] 🏓 Ping received for owner/repo — webhook is live`",
           },
         ],
       },
