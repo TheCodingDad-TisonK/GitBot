@@ -1,4 +1,4 @@
-// help.js — /help command with category dropdown + pagination (GitBot V2)
+// help.js — /help command with category dropdown + pagination (GitBot V3)
 
 "use strict";
 
@@ -29,35 +29,41 @@ const C = {
 const CATEGORIES = {
 
   overview: {
-    label: "📖 Overview", description: "What GitBot V2 is and how it works",
+    label: "📖 Overview", description: "What GitBot V3 is and how it works",
     color: C.overview,
     pages: [{
-      title: "📖 GitBot V2 — Overview",
+      title: "📖 GitBot V3 — Overview",
       description:
-        "GitBot V2 is a self-hosted Discord bot that forwards **GitHub webhook events** to channels " +
+        "GitBot V3 is a self-hosted Discord bot that forwards **GitHub webhook events** to channels " +
         "as rich embeds. Events are routed per-type and hot-reload from `config.json` without a restart.\n\n" +
-        "V2 adds **muting**, a **live digest**, **context menus**, and fully interactive embeds with " +
+        "V3 adds **multi-repo support**, **muting**, a **live digest**, **context menus**, and fully interactive embeds with " +
         "confirmation flows and undo support.",
       fields: [
         {
           name: "📦 Files",
           value:
-            "`index.js`    — bot, webhook server, all interactions\n" +
-            "`embeds.js`   — GitHub event → Discord embed formatters\n" +
-            "`digest.js`   — in-memory ring buffer (last 50 events)\n" +
-            "`mutes.js`    — in-memory mute store\n" +
-            "`config.json` — channel routing + `log_channel`\n" +
-            "`.env`        — secrets (never commit!)",
+            "`index.js`        — bot, webhook server, all interactions\n" +
+            "`embeds.js`       — GitHub event → Discord embed formatters\n" +
+            "`digest.js`       — in-memory ring buffer (last 50 events)\n" +
+            "`mutes.js`        — in-memory mute store\n" +
+            "`database.js`     — SQLite multi-repo store\n" +
+            "`multiWebhook.js` — per-repo webhook routing\n" +
+            "`repoCommands.js` — `/repo` and `/admin` commands\n" +
+            "`poller.js`       — GitHub API polling\n" +
+            "`.env`            — secrets (never commit!)",
         },
         {
           name: "🔒 Webhook security",
           value:
-            "Set `GITHUB_WEBHOOK_SECRET` in `.env` to match your GitHub secret. " +
-            "Every request is verified via **HMAC-SHA256**.",
+            "Each repo gets an **auto-generated HMAC-SHA256 secret** at `/repo add`. " +
+            "Set `WEBHOOK_BASE_URL` in `.env` to your ngrok/public URL — the ready-to-paste " +
+            "payload URL appears immediately in the reply.",
         },
         {
-          name: "🔄 Hot-reload",
-          value: "`config.json` is re-read on **every** incoming event — no restart needed.",
+          name: "🗄️ Multi-repo",
+          value:
+            "Add unlimited repos with `/repo add owner/repo`. " +
+            "Each gets its own Discord channel and webhook endpoint at `/webhook/:id`.",
         },
       ],
     }],
@@ -304,7 +310,7 @@ const CATEGORIES = {
             name: "4️⃣ Configure .env",
             value:
               "```bash\ncp .env.example .env\n```\n" +
-              "Fill in `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `WEBHOOK_PORT`, `GITHUB_WEBHOOK_SECRET`.",
+              "Fill in `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `WEBHOOK_PORT`, and `WEBHOOK_BASE_URL` (your ngrok URL).",
           },
         ],
       },
@@ -313,25 +319,26 @@ const CATEGORIES = {
         description: "Finishing up:",
         fields: [
           {
-            name: "5️⃣ Create Discord channels",
-            value: "Create `#github-commits`, `#github-releases`, `#github-issues`, and `#github-log`.",
+            name: "5️⃣ Start ngrok",
+            value: "```bash\nngrok http 3000\n```\nCopy the `https://xxxx.ngrok-free.app` URL and set it as `WEBHOOK_BASE_URL` in `.env`.",
           },
           {
             name: "6️⃣ Start the bot",
             value: "```bash\nnpm start\n```",
           },
           {
-            name: "7️⃣ Expose with ngrok (local dev)",
-            value: "```bash\nngrok http 3000\n```\nCopy the `https://xxxx.ngrok-free.app` URL.",
+            name: "7️⃣ Add a repository",
+            value:
+              "In Discord, run:\n```\n/repo add owner/repo\n```\n" +
+              "GitBot will create a channel and reply with a ready-to-paste **Payload URL** and **Secret**.",
           },
           {
-            name: "8️⃣ Add the GitHub webhook",
+            name: "8️⃣ Paste into GitHub",
             value:
               "Repo → **Settings → Webhooks → Add webhook**\n" +
-              "• Payload URL: `https://xxxx.ngrok-free.app/webhook`\n" +
+              "• Paste the **Payload URL** and **Secret** from the `/repo add` reply\n" +
               "• Content type: `application/json`\n" +
-              "• Secret: same as `GITHUB_WEBHOOK_SECRET`\n" +
-              "Green ✅ from GitHub = you're set!",
+              "Green ✅ from GitHub = you're all set!",
           },
         ],
       },
@@ -423,8 +430,8 @@ function buildHelpMessage(categoryKey, pageIndex) {
     .setDescription(page.description)
     .setFooter({
       text: total > 1
-        ? `Page ${idx + 1} of ${total}  •  GitBot V2 Help`
-        : "GitBot V2 Help",
+        ? `Page ${idx + 1} of ${total}  •  GitBot V3 Help`
+        : "GitBot V3 Help",
     })
     .setTimestamp();
 
@@ -471,7 +478,7 @@ function buildHelpMessage(categoryKey, pageIndex) {
 
 const helpCommand = new SlashCommandBuilder()
   .setName("help")
-  .setDescription("Browse GitBot V2 documentation — commands, context menus, events, and setup")
+  .setDescription("Browse GitBot V3 documentation — commands, context menus, events, and setup")
   .toJSON();
 
 async function handleHelpInteraction(interaction) {
