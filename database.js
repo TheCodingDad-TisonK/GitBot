@@ -22,9 +22,10 @@ let db;
  * Initialize database and create tables
  */
 function init() {
-  // Use synchronous better-sqlite3 if available, otherwise wrap sqlite3
-  const useSync = !!(require.cache[require.resolve("better-sqlite3")]);
-  
+  // better-sqlite3 (sync) was loaded if its constructor is named "Database";
+  // sqlite3 verbose() returns an object whose constructor is named "verbose".
+  const useSync = Database.name === "Database";
+
   if (useSync) {
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
@@ -146,7 +147,12 @@ function _createTablesAsync(callback) {
             processed INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (repo_id) REFERENCES repositories(id)
-          )`, callback);
+          )`, () => {
+            // Create indexes (same as sync path)
+            db.run("CREATE INDEX IF NOT EXISTS idx_repos_full_name ON repositories(full_name)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_repos_active ON repositories(is_active)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_tokens_default ON github_tokens(is_default)", callback);
+          });
         });
       });
     });
@@ -208,7 +214,7 @@ function addRepository(owner, name, channelId, createdBy, options = {}) {
             }
             return reject(err);
           }
-          resolve(getRepositoryByIdSync(this.lastID));
+          resolve(_getRepositoryByIdAsync(this.lastID));
         }
       );
     });
@@ -223,7 +229,8 @@ function getRepositoryById(id) {
   return stmt.get(id);
 }
 
-function getRepositoryByIdSync(id) {
+// Async (sqlite3) counterpart to getRepositoryById
+function _getRepositoryByIdAsync(id) {
   return new Promise((resolve, reject) => {
     db.get("SELECT * FROM repositories WHERE id = ?", [id], (err, row) => {
       if (err) return reject(err);

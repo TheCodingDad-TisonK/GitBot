@@ -28,9 +28,6 @@ const {
 } = require("discord.js");
 
 const express = require("express");
-const crypto  = require("crypto");
-const fs      = require("fs");
-const path    = require("path");
 
 // Database and modules
 const db        = require("./database");
@@ -241,7 +238,6 @@ const slashCommands = [
     .setName("status")
     .setDescription("Show bot status, uptime, and event statistics"),
 
-
   new SlashCommandBuilder()
     .setName("events")
     .setDescription("Show a breakdown of all events received since bot started"),
@@ -296,7 +292,7 @@ const contextMenus = [
     .toJSON(),
 ];
 
-const allCommands = [...slashCommands, ...repoCommands, helpCommand, ...contextMenus];
+const allCommands = [...slashCommands, ...repoCommands.map(c => c.toJSON()), helpCommand, ...contextMenus];
 
 // ─── Initialize Database ───────────────────────────────────────────────────────
 
@@ -441,8 +437,15 @@ client.on("interactionCreate", async (interaction) => {
     if (cmd === "test") {
       let chName = (interaction.options.getString("channel") || "").replace(/^#/, "");
       if (!chName) {
-        const cfg = loadConfig();
-        chName    = Object.values(cfg.channels).find(v => v != null) || "github-general";
+        // Default to the first active repo's channel, or a fallback name
+        const repos  = db.getAllRepositories();
+        const first  = repos.find(r => r.channel_id);
+        if (first) {
+          const ch = client.channels.cache.get(first.channel_id);
+          chName = ch?.name || "github-general";
+        } else {
+          chName = "github-general";
+        }
       }
 
       const ch = await getChannel(chName);
@@ -457,7 +460,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const testEmbed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setAuthor({ name: "GitBot V2", iconURL: client.user.displayAvatarURL() })
+        .setAuthor({ name: "GitBot V3", iconURL: client.user.displayAvatarURL() })
         .setTitle("🧪 Test Notification")
         .setDescription(
           "If you can see this, GitBot can post to this channel.\n\n" +
@@ -738,22 +741,27 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({ content: "❌ That message has no embeds.", ephemeral: true });
       }
 
-      const cfg      = loadConfig();
-      const channels = [...new Set(Object.values(cfg.channels).filter(Boolean))];
+      // Build the channel list from active repos (V3 — DB-driven)
+      const repos    = db.getAllRepositories();
+      const chNames  = [...new Set(
+        repos
+          .map(r => client.channels.cache.get(r.channel_id)?.name)
+          .filter(Boolean)
+      )];
 
-      if (channels.length === 0) {
-        return interaction.reply({ content: "❌ No channels configured.", ephemeral: true });
+      if (chNames.length === 0) {
+        return interaction.reply({ content: "❌ No monitored channels found. Add a repo with `/repo add` first.", ephemeral: true });
       }
 
       const pickerEmbed = new EmbedBuilder()
         .setColor(0x3498DB)
         .setTitle("🔁 Resend Embed — Pick a channel")
         .setDescription("Choose which channel to resend this embed to:")
-        .setFooter({ text: "Only channels in config.json are shown" });
+        .setFooter({ text: "Shows channels for currently monitored repositories" });
 
       // Up to 4 channel buttons + cancel
       const pickerRow = new ActionRowBuilder().addComponents(
-        ...channels.slice(0, 4).map(ch =>
+        ...chNames.slice(0, 4).map(ch =>
           new ButtonBuilder()
             .setCustomId(`resend:${message.id}:${ch}`)
             .setLabel(`#${ch}`)
@@ -785,7 +793,6 @@ client.on("interactionCreate", async (interaction) => {
       id === "dismiss"           ||
       id.endsWith(":dismiss")    ||
       id === "ping:dismiss"      ||
-      id === "route:cancel"      ||
       id === "mute:cancel"       ||
       id === "resend:cancel"     ||
       id === "clearstats:cancel"
@@ -832,86 +839,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ── Route: Confirm ────────────────────────────────────────────────────────
-    if (id.startsWith("route:confirm:")) {
-      // route:confirm:<eventType>:<newChannel|__off__>
-      const [, , eventType, rawChannel] = id.split(":");
-      const newChannel = rawChannel === "__off__" ? null : rawChannel;
-
-      const cfg = loadConfig();
-      const old = cfg.channels[eventType] ?? null;
-      cfg.channels[eventType] = newChannel;
-      saveConfig(cfg);
-
-      const successEmbed = new EmbedBuilder()
-        .setColor(0x2ECC71)
-        .setTitle("✅ Route Updated")
-        .setDescription(
-          newChannel
-            ? `**\`${eventType}\`** → **#${newChannel}**`
-            : `**\`${eventType}\`** is now **disabled**`
-        )
-        .setTimestamp();
-
-      // Offer Undo for 30 s
-      const undoRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`route:undo:${eventType}:${old ?? "__off__"}`)
-          .setLabel("Undo")
-          .setEmoji("↩️")
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId("route:done")
-          .setLabel("Done")
-          .setEmoji("✅")
-          .setStyle(ButtonStyle.Secondary),
-      );
-
-      await interaction.update({ embeds: [successEmbed], components: [undoRow] });
-
-      setTimeout(async () => {
-        try {
-          await interaction.editReply({
-            components: [new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId("__n5__").setLabel("Undo").setEmoji("↩️").setStyle(ButtonStyle.Danger).setDisabled(true),
-              new ButtonBuilder().setCustomId("__n6__").setLabel("Done").setEmoji("✅").setStyle(ButtonStyle.Secondary).setDisabled(true),
-            )],
-          });
-        } catch { /* gone */ }
-      }, 30_000);
-      return;
-    }
-
-    // ── Route: Undo ───────────────────────────────────────────────────────────
-    if (id.startsWith("route:undo:")) {
-      const [, , eventType, rawOld] = id.split(":");
-      const restored = rawOld === "__off__" ? null : rawOld;
-
-      const cfg = loadConfig();
-      cfg.channels[eventType] = restored;
-      saveConfig(cfg);
-
-      const undoneEmbed = new EmbedBuilder()
-        .setColor(0x9B59B6)
-        .setTitle("↩️ Route Restored")
-        .setDescription(
-          restored
-            ? `**\`${eventType}\`** restored to **#${restored}**`
-            : `**\`${eventType}\`** restored to **disabled**`
-        )
-        .setTimestamp();
-
-      await interaction.update({ embeds: [undoneEmbed], components: [rowDismiss("route:done")] });
-      return;
-    }
-
-    // ── Route: Done ───────────────────────────────────────────────────────────
-    if (id === "route:done") {
-      try { await interaction.message.delete(); } catch { /* gone */ }
-      await interaction.deferUpdate().catch(() => {});
-      return;
-    }
-
     // ── Test embed: Looks good! ────────────────────────────────────────────────
     if (id.startsWith("test:ok:")) {
       try { await interaction.message.delete(); } catch { /* gone */ }
@@ -930,7 +857,7 @@ client.on("interactionCreate", async (interaction) => {
       const port = process.env.WEBHOOK_PORT || 3000;
       const resendEmbed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setAuthor({ name: "GitBot V2", iconURL: client.user.displayAvatarURL() })
+        .setAuthor({ name: "GitBot V3", iconURL: client.user.displayAvatarURL() })
         .setTitle("🧪 Test Notification (Resent)")
         .setDescription("Test embed resent on request.")
         .addFields(
@@ -1158,9 +1085,19 @@ function buildDigestPayload(entries, currentCount) {
 // ─── Bot ready ────────────────────────────────────────────────────────────────
 
 client.once("ready", async () => {
-  // Set bot owner ID for admin checks
-  setBotOwnerId(client.user.id);
-  
+  // Resolve the real application owner (the Discord user who owns the bot
+  // application) so they always have admin access regardless of the DB.
+  try {
+    const app = await client.application.fetch();
+    const ownerId = app.owner?.id || app.owner?.ownerId || null;
+    if (ownerId) setBotOwnerId(ownerId);
+  } catch (err) {
+    console.warn("[bot] Could not fetch application owner:", err.message);
+  }
+
+  // Start GitHub API polling for repos that have it enabled
+  githubPoller.start();
+
   console.log(`✅ GitBot V3 logged in as ${client.user.tag}`);
   const cfg = loadConfig();
   console.log("\n📋 Channel routing:");
@@ -1188,15 +1125,6 @@ function chunks(arr, size) {
   return out;
 }
 
-function verifySignature(rawBody, sig) {
-  const secret = process.env.GITHUB_WEBHOOK_SECRET;
-  if (!secret) return true;
-  if (!sig)    return false;
-  const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
-  try { return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); }
-  catch { return false; }
-}
-
 // ─── Webhook server (Multi-repo) ─────────────────────────────────────────────
 
 const app = express();
@@ -1205,32 +1133,6 @@ const app = express();
 const webhookRouter = createWebhookRouter(client, getChannel);
 app.use(webhookRouter);
 
-// Also add legacy health endpoint at root
-app.get("/health", (_req, res) => {
-  res.json({
-    status:   "ok",
-    version:  "3.0.0",
-    mode:     "multi-repo",
-    bot:      client.isReady() ? "connected" : "disconnected",
-    uptime:   process.uptime(),
-    repos:    db.getAllRepositories().length,
-    polling:  db.getPollableRepositories().length,
-    mutes:    mutes.list().map(m => ({
-      event:     m.eventType,
-      expiresAt: m.expiresAt,
-      reason:    m.reason,
-    })),
-    stats: {
-      eventsReceived: stats.eventsReceived,
-      eventsSent:     stats.eventsSent,
-      eventsDropped:  stats.eventsDropped,
-      eventsIgnored:  stats.eventsIgnored,
-      eventsMuted:    stats.eventsMuted,
-      lastEvent:      stats.lastEvent,
-      lastEventTime:  stats.lastEventTime,
-    },
-  });
-});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 

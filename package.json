@@ -1,6 +1,6 @@
 {
   "name": "discord-github-bot",
-  "version": "3.0.0thi",
+  "version": "3.0.1",
   "description": "GitBot V3 — Multi-repo Discord bot with GitHub webhook and polling support",
   "main": "index.js",
   "scripts": {
