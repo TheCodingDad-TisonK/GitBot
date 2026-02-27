@@ -58,15 +58,28 @@ function createWebhookRouter(client, getChannel) {
     verify: (req, _res, buf) => { req.rawBody = buf; },
   }));
   
-  // Health check
+  // Health check — used by monitoring tools and the /help troubleshooting guide
   router.get("/health", (_req, res) => {
     res.json({
       status:   "ok",
-      version:  "3.0.0",
+      version:  "3.0.1",
       mode:     "multi-repo",
       bot:      client.isReady() ? "connected" : "disconnected",
+      uptime:   process.uptime(),
       repos:    db.getAllRepositories().length,
       polling:  db.getPollableRepositories().length,
+      mutes:    mutes.list().map(m => ({
+        event:     m.eventType,
+        expiresAt: m.expiresAt,
+        reason:    m.reason,
+      })),
+      stats: {
+        eventsReceived: stats.eventsReceived,
+        eventsSent:     stats.eventsSent,
+        eventsDropped:  stats.eventsDropped,
+        eventsIgnored:  stats.eventsIgnored,
+        eventsMuted:    stats.eventsMuted,
+      },
     });
   });
   

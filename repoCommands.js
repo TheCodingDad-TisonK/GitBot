@@ -14,7 +14,6 @@ const {
 } = require("discord.js");
 
 const db = require("./database");
-const { getRepoInfo } = require("./poller");
 
 // ─── In-memory pending setup tracker ─────────────────────────────────────────
 // Tracks repos waiting for webhook confirmation (adminUserId, targetUserId, dmMessageId)
@@ -123,17 +122,6 @@ const repoCommands = [
 ];
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
-
-/**
- * Check if user is admin
- */
-function checkAdmin(userId, botOwnerId = null) {
-  // Bot owner is always admin
-  if (botOwnerId && userId === botOwnerId) {
-    return true;
-  }
-  return db.isAdmin(userId);
-}
 
 /**
  * Parse repository string (owner/repo)
@@ -844,6 +832,6 @@ module.exports = {
   handleRepoCommand,
   handleAdminCommand,
   handleRepoInteraction,
-  checkAdmin: isUserAdmin,
+  isUserAdmin,
   setBotOwnerId,
 };

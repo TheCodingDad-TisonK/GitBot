@@ -71,7 +71,6 @@ function githubRequest(method, path, token, body = null) {
     
     if (body) {
       options.headers["Content-Type"] = "application/json";
-      options.body = JSON.stringify(body);
     }
     
     const req = protocol.request(options, (res) => {
@@ -175,14 +174,9 @@ async function getRecentReleases(owner, name, token, beforeTag = null) {
 /**
  * Get recent pull requests
  */
-async function getRecentPullRequests(owner, name, token, since = null) {
+async function getRecentPullRequests(owner, name, token) {
   try {
-    let url = `/${owner}/${name}/pulls?state=all&per_page=10`;
-    if (since) {
-      // GitHub API doesn't support filtering by date directly for PRs
-      // We'll get all and filter client-side
-    }
-    const data = await githubRequest("GET", url, token);
+    const data = await githubRequest("GET", `/${owner}/${name}/pulls?state=all&per_page=10`, token);
     return data || [];
   } catch (err) {
     throw err;
@@ -324,6 +318,10 @@ class GitHubPoller {
           
           // Build a synthetic push event for each new commit (up to 5)
           for (const commit of newCommits.slice(0, 5)) {
+            // Note: the GitHub Commits API doesn't return the branch name, so
+            // we can't determine the actual ref. We use the default branch name
+            // from the repo object if available, otherwise fall back to "main".
+            const defaultBranch = repo.default_branch || "main";
             const payload = {
               repository: {
                 full_name: repo.full_name,
@@ -336,7 +334,7 @@ class GitHubPoller {
                 html_url: commit.author?.html_url || null,
               },
               commits: [commit],
-              ref: `refs/heads/main`,
+              ref: `refs/heads/${defaultBranch}`,
               compare: `https://github.com/${repo.full_name}/compare/${repo.last_commit_sha}...${latestSha}`,
             };
             

@@ -1,5 +1,7 @@
 // embeds.js — formats GitHub webhook payloads into Discord embeds
 
+"use strict";
+
 const { EmbedBuilder } = require("discord.js");
 
 // ─── Color palette ────────────────────────────────────────────────────────────
